@@ -1,5 +1,5 @@
 #include "main.h"
-// PSC 199 ARR 8399  CLK FREQ 84MHZ IN PLL for 18o rotation
+// PSC 199 ARR 8399  CLK FREQ 84MHZ IN PLL for 18o rotation for SG90
 TIM_HandleTypeDef htim2;
 
 void SystemClock_Config(void);
