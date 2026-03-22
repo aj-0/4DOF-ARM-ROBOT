@@ -1,4 +1,4 @@
-#include "stm32f4xx.h"
+#include "stm32f4xx.h"  //PA0
 
 /* -------- Delay (rough, depends on 16MHz HSI) -------- */
 void delay_ms(uint32_t ms)
