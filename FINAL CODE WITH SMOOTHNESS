@@ -1,0 +1,196 @@
+#include "main.h"
+#include <stdlib.h>
+#include <string.h>
+
+// ================= HANDLES =================
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+UART_HandleTypeDef huart1;
+
+// ================= GLOBAL =================
+
+// smooth control
+int current_angle[5] = {90,90,90,90,30};
+int target_angle[5]  = {90,90,90,90,30};
+
+// UART
+uint8_t rx_data;
+char buffer[10];
+int index_AJ = 0;
+int servo_index = 0;
+
+// ================= LIMIT =================
+uint8_t constrain_angle(uint8_t servo, uint8_t angle)
+{
+    switch(servo)
+    {
+        case 0: if(angle < 20) angle = 20; if(angle > 160) angle = 160; break;
+        case 1: if(angle < 30) angle = 30; if(angle > 140) angle = 140; break;
+        case 2: if(angle < 40) angle = 40; if(angle > 150) angle = 150; break;
+        case 3: if(angle < 30) angle = 30; if(angle > 150) angle = 150; break;
+        case 4: if(angle < 20) angle = 20; if(angle > 80)  angle = 80;  break;
+    }
+    return angle;
+}
+
+// ================= SMOOTH UPDATE =================
+void update_servos_smooth()
+{
+    for(int i = 0; i < 5; i++)
+    {
+        int diff = target_angle[i] - current_angle[i];
+
+        if(diff > 1) current_angle[i]++;
+        else if(diff < -1) current_angle[i]--;
+
+        uint16_t pulse = 500 + (current_angle[i] * 2000 / 180);
+
+        switch(i)
+        {
+            case 0: __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse); break;
+            case 1: __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pulse); break;
+            case 2: __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pulse); break;
+            case 3: __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse); break;
+            case 4: __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse); break;
+        }
+    }
+}
+
+// ================= PROTOTYPES =================
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_USART1_UART_Init(void);
+
+// ================= MAIN =================
+int main(void)
+{
+  HAL_Init();
+  SystemClock_Config();
+
+  MX_GPIO_Init();
+  MX_TIM2_Init();
+  MX_TIM3_Init();
+  MX_USART1_UART_Init();
+
+  // start PWM
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+
+  // prevent startup jerk
+  for(int i = 0; i < 5; i++)
+  {
+      target_angle[i] = current_angle[i];
+  }
+
+  // start UART
+  HAL_UART_Receive_IT(&huart1, &rx_data, 1);
+
+  while (1)
+  {
+      update_servos_smooth();
+      HAL_Delay(2);   // smooth + fast
+  }
+}
+
+// ================= UART CALLBACK =================
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    if (rx_data != ',' && rx_data != '\n' && rx_data != '\r')
+    {
+      buffer[index_AJ++] = rx_data;
+
+      if (index_AJ >= sizeof(buffer) - 1)
+        index_AJ = 0;
+    }
+    else
+    {
+      buffer[index_AJ] = '\0';
+      index_AJ = 0;
+
+      if (buffer[0] != '\0')
+      {
+        int angle = atoi(buffer);
+
+        angle = constrain_angle(servo_index, angle);
+        target_angle[servo_index] = angle;
+      }
+
+      if (rx_data == '\n')
+      {
+        servo_index = 0;
+      }
+      else
+      {
+        servo_index++;
+        if (servo_index >= 5)
+          servo_index = 0;
+      }
+    }
+
+    HAL_UART_Receive_IT(&huart1, &rx_data, 1);
+  }
+}
+
+// ================= INIT FUNCTIONS =================
+static void MX_USART1_UART_Init(void)
+{
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  HAL_UART_Init(&huart1);
+}
+
+static void MX_TIM2_Init(void)
+{
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 15;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 20000;
+  HAL_TIM_PWM_Init(&htim2);
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+
+  HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1);
+  HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2);
+  HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3);
+}
+
+static void MX_TIM3_Init(void)
+{
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 15;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 20000;
+  HAL_TIM_PWM_Init(&htim3);
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+
+  HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1);
+  HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2);
+}
+
+static void MX_GPIO_Init(void)
+{
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+}
+
+void SystemClock_Config(void)
+{
+}
