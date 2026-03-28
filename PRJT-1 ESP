@@ -1,0 +1,200 @@
+#include <WiFi.h> // bore UI
+
+// WiFi AP
+const char* ssid = "ESP32_ARM";
+const char* password = "12345678";
+
+WiFiServer server(80);
+
+// UART2 pins
+#define RXD2 16
+#define TXD2 17
+
+String header;
+
+// store angles
+int angles[5] = {90, 90, 90, 90, 90};
+
+// ================= SETUP =================
+void setup() {
+  Serial.begin(115200);
+
+  // UART2 → STM32
+  Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
+
+  WiFi.softAP(ssid, password);
+  Serial.println("AP Started");
+  Serial.println(WiFi.softAPIP());
+
+  server.begin();
+}
+
+// ================= SEND DATA =================
+void sendToSTM32() {
+  String data = String(angles[0]) + "," +
+                String(angles[1]) + "," +
+                String(angles[2]) + "," +
+                String(angles[3]) + "," +
+                String(angles[4]) + "\n";
+
+  Serial2.print(data);
+
+  Serial.print("Sent: ");
+  Serial.println(data);
+}
+
+// ================= HANDLE REQUEST =================
+void handleServo(String req) {
+  int s = req.indexOf("servo=");
+  int v = req.indexOf("value=");
+
+  if (s != -1 && v != -1) {
+    int servo = req.substring(s + 6).toInt();
+    int value = req.substring(v + 6).toInt();
+
+    value = constrain(value, 0, 180);
+
+    if (servo >= 1 && servo <= 5) {
+      angles[servo - 1] = value;
+
+      sendToSTM32();   // 🔥 SEND TO STM32
+    }
+  }
+}
+
+// ================= LOOP =================
+void loop() {
+  WiFiClient client = server.available();
+
+  if (client) {
+    header = "";
+    unsigned long timeout = millis();
+
+    while (client.connected() && millis() - timeout < 2000) {
+      if (client.available()) {
+        char c = client.read();
+        header += c;
+
+        if (c == '\n') {
+
+          // -------- CONTROL --------
+          if (header.indexOf("GET /set?") >= 0) {
+            handleServo(header);
+
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/plain");
+            client.println();
+            client.println("OK");
+            break;
+          }
+
+          // -------- WEB UI --------
+          client.println("HTTP/1.1 200 OK");
+          client.println("Content-type:text/html");
+          client.println();
+
+          client.println(R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AJ's Automation</title>
+
+<style>
+body {
+  margin: 0;
+  font-family: 'Segoe UI', sans-serif;
+  background: linear-gradient(145deg, #0a0f1c, #111827);
+  color: white;
+}
+
+h1 {
+  text-align: center;
+  color: #00e5ff;
+  margin-top: 20px;
+}
+
+.container {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  padding: 20px;
+}
+
+.card {
+  background: rgba(255,255,255,0.05);
+  border-radius: 15px;
+  padding: 20px;
+}
+
+.label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.slider {
+  width: 100%;
+}
+
+.value {
+  color: #00e5ff;
+}
+
+</style>
+</head>
+
+<body>
+
+<h1>🤖 AJ's Automation</h1>
+
+<div class="container">
+
+<div class="card">
+<span>Base <span id="v1">90</span></span>
+<input type="range" min="0" max="180" value="90" oninput="update(1,this.value)">
+</div>
+
+<div class="card">
+<span>Shoulder <span id="v2">90</span></span>
+<input type="range" min="0" max="180" value="90" oninput="update(2,this.value)">
+</div>
+
+<div class="card">
+<span>Elbow <span id="v3">90</span></span>
+<input type="range" min="0" max="180" value="90" oninput="update(3,this.value)">
+</div>
+
+<div class="card">
+<span>Wrist <span id="v4">90</span></span>
+<input type="range" min="0" max="180" value="90" oninput="update(4,this.value)">
+</div>
+
+<div class="card" style="grid-column: span 2;">
+<span>Gripper <span id="v5">90</span></span>
+<input type="range" min="0" max="180" value="90" oninput="update(5,this.value)">
+</div>
+
+</div>
+
+<script>
+function update(servo, value) {
+  document.getElementById("v"+servo).innerHTML = value;
+
+  var xhttp = new XMLHttpRequest();
+  xhttp.open("GET", "/set?servo=" + servo + "&value=" + value, true);
+  xhttp.send();
+}
+</script>
+
+</body>
+</html>
+)rawliteral");
+
+          break;
+        }
+      }
+    }
+    client.stop();
+  }
+}
